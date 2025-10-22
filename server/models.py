@@ -1,15 +1,16 @@
 from pydantic import BaseModel
 from datetime import datetime
+from typing import Optional
 
 class Reading(BaseModel):
-    camera_id: int
+    camera_id: str
     camera_location: str
     vehicle_id: str
-    timestamp: str
-    is_entrance: bool
-    is_camera: bool
-    is_restarea: bool
-    speed: int
-    speed_limit: int
-    timestamp_entrance: str
-    timestamp_exit: str
+    timestamp: Optional[str] = None
+    is_entrance: Optional[bool] = None
+    is_camera: Optional[bool] = None
+    is_restarea: Optional[bool] = None
+    speed: Optional[int] = None
+    speed_limit: Optional[int] = None
+    timestamp_entrance: Optional[str] = None
+    timestamp_exit: Optional[str] = None

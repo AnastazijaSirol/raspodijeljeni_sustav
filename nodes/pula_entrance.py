@@ -2,7 +2,7 @@ import requests
 import random
 import string
 import time
-from datetime import datetime, UTC
+from datetime import datetime
 
 API_URL = "http://localhost:8000/readings"
 
@@ -17,20 +17,12 @@ def generate_random_registration():
 
 def generate_vehicle_data():
     vehicle_id = generate_random_registration()
-    timestamp=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return {
         "camera_id": CAMERA_ID,
         "camera_location": LOCATION,
         "vehicle_id": vehicle_id,
         "timestamp": timestamp,
-        "is_entrance": True,
-        "is_camera": None,
-        "is_restarea": None,
-        "speed": None,
-        "speed_limit": None,
-        "timestamp_entrance": None,
-        "timestamp_exit": None,
     }
 
 def send_data():
@@ -44,7 +36,16 @@ def send_data():
                 print(f"Greška: {response.status_code}, {response.text}")
         except requests.exceptions.ConnectionError:
             print("Ne mogu se spojiti na server. Provjeri da FastAPI radi.")
-        time.sleep(5)
+
+        delay = 10
+
+        # simuliranje "slučajne greške" u vremenu, da ne bude pravilno svakih 10s
+        if random.random() < 0.1:
+            delay += random.choice([-5, 5])
+            if delay < 1:
+                delay = 1
+
+        time.sleep(delay)
 
 if __name__ == "__main__":
     print("Pokrećem generianje podataka ULAZA PULA...")

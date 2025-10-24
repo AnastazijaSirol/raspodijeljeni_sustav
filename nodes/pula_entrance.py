@@ -23,6 +23,7 @@ def generate_vehicle_data():
         "camera_location": LOCATION,
         "vehicle_id": vehicle_id,
         "timestamp": timestamp,
+        "is_entrance": True,
     }
 
 def send_data():

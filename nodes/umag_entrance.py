@@ -23,6 +23,7 @@ def generate_vehicle_data():
         "camera_location": LOCATION,
         "vehicle_id": vehicle_id,
         "timestamp": timestamp,
+        "is_entrance": True,
     }
 
 def send_data():
@@ -48,5 +49,5 @@ def send_data():
         time.sleep(delay)
 
 if __name__ == "__main__":
-    print("Pokrećem generianje podataka ULAZA PULA...")
+    print("Pokrećem generianje podataka ULAZA UMAG...")
     send_data()

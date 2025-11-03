@@ -13,9 +13,10 @@ LOCATION = "Kamera Rijeka"
 
 TRAVEL_TIME_FROM_RIJEKA = 35
 TRAVEL_TIME_FROM_PULA = 40
+TRAVEL_TIME_FROM_UMAG = 50
 TRAVEL_VARIATION = 5  # +- 5 min
 
-PROCESSED_FILE = "processed_vehicles.json"
+PROCESSED_FILE = "processed_vehicles_camera1.json"
 
 dynamodb = boto3.resource(
     "dynamodb",
@@ -51,15 +52,13 @@ def scan_full_table():
 
 def get_entrances():
     all_items = scan_full_table()
-
     entrances = [
         item for item in all_items
         if str(item.get("is_entrance")).lower() == "true"
-        and item.get("camera_id") in ["PULA-ENTRANCE", "RIJEKA-ENTRANCE"]
+        and item.get("camera_id") in ["PULA-ENTRANCE", "RIJEKA-ENTRANCE", "UMAG-ENTRANCE"]
     ]
-
     if entrances:
-        print(f"Pronađeno {len(entrances)} vozila na ulazima (Pula/Rijeka).")
+        print(f"Pronađeno {len(entrances)} vozila na ulazima (Pula/Rijeka/Umag).")
     else:
         print("Nema pronađenih vozila na ulazima.")
     return entrances
@@ -71,7 +70,10 @@ def generate_vehicle_passages(entrances, processed_records):
     passages = []
 
     for vehicle in entrances:
+        origin = vehicle.get("camera_id", "")
+        vehicle_id = vehicle.get("vehicle_id")
         key = make_unique_key(vehicle)
+
         if not key or key in processed_records:
             continue
 
@@ -84,15 +86,25 @@ def generate_vehicle_passages(entrances, processed_records):
         except ValueError:
             continue
 
-        origin = vehicle.get("camera_id", "")
+        must_pass = False
+        travel_time = None
+
         if origin == "RIJEKA-ENTRANCE":
+            must_pass = True
             travel_time = TRAVEL_TIME_FROM_RIJEKA
+
         elif origin == "PULA-ENTRANCE":
-            if random.random() > 0.6:
-                processed_records.add(key)
-                continue
-            travel_time = TRAVEL_TIME_FROM_PULA
-        else:
+            if random.random() <= 0.4:  # 40% prolazi
+                must_pass = True
+                travel_time = TRAVEL_TIME_FROM_PULA
+
+        elif origin == "UMAG-ENTRANCE":
+            if random.random() <= 0.25:  # 25% prolazi
+                must_pass = True
+                travel_time = TRAVEL_TIME_FROM_UMAG
+
+        if not must_pass:
+            processed_records.add(key)
             continue
 
         travel_time += random.randint(-TRAVEL_VARIATION, TRAVEL_VARIATION)
@@ -104,7 +116,7 @@ def generate_vehicle_passages(entrances, processed_records):
         passages.append({
             "camera_id": CAMERA_ID,
             "camera_location": LOCATION,
-            "vehicle_id": vehicle["vehicle_id"],
+            "vehicle_id": vehicle_id,
             "timestamp": passage_time.strftime("%Y-%m-%d %H:%M:%S"),
             "is_camera": True,
             "speed": speed,
@@ -129,19 +141,25 @@ def send_data_to_server(passages):
         time.sleep(random.uniform(1.5, 3.5))
 
 def main():
-    print("Pokrećem generiranje podataka za kameru PULA–RIJEKA...")
+    print("Pokrećem generiranje podataka za kameru CAMERA1...")
 
     processed_records = load_processed_records()
 
     while True:
         entrances = get_entrances()
         passages = generate_vehicle_passages(entrances, processed_records)
+
         if passages:
             send_data_to_server(passages)
             save_processed_records(processed_records)
         else:
             print("Nema novih vozila za obradu...")
+
         time.sleep(10)
 
 if __name__ == "__main__":
     main()
+
+# SVA vozila iz RIJEKE prolaze pored ove kamere
+# 40% vozila iz PULE prolazi pored ove kamere
+# 25% vozila iz Rijeke prolazi pored ove kamere

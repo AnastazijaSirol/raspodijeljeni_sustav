@@ -38,9 +38,9 @@ def send_data():
         except requests.exceptions.ConnectionError:
             print("Ne mogu se spojiti na server. Provjeri da FastAPI radi.")
 
-        delay = 10
+        delay = 30
 
-        # simuliranje "slučajne greške" u vremenu, da ne bude pravilno svakih 10s
+        # simuliranje "slučajne greške" u vremenu, da ne bude pravilno svakih 30s
         if random.random() < 0.1:
             delay += random.choice([-5, 5])
             if delay < 1:

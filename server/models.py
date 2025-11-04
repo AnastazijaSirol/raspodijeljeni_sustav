@@ -7,6 +7,7 @@ class Reading(BaseModel):
     vehicle_id: str
     timestamp: Optional[str] = None
     is_entrance: Optional[bool] = None
+    is_exit: Optional[bool] = None
     is_camera: Optional[bool] = None
     is_restarea: Optional[bool] = None
     speed: Optional[int] = None

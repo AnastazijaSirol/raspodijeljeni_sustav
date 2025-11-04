@@ -52,9 +52,9 @@ def get_all_readings():
 
     return {"count": len(items), "data": items}
 
+
 @app.get("/stats")
 def get_statistics():
-
     table = dynamodb_client.Table(TABLE_NAME)
 
     response = table.scan()
@@ -65,6 +65,7 @@ def get_statistics():
 
     entrances = {"PULA-ENTRANCE": set(), "RIJEKA-ENTRANCE": set(), "UMAG-ENTRANCE": set()}
     cameras = {}
+    exits = {}
 
     for item in items:
         vehicle_id = item.get("vehicle_id")
@@ -75,13 +76,21 @@ def get_statistics():
         if not vehicle_id or not camera_id:
             continue
 
+        # Vozila na ulazima
         if is_entrance and camera_id in entrances:
             entrances[camera_id].add(vehicle_id)
 
+        # Vozila koja su prošla pored kamera
         if is_camera:
             if camera_id not in cameras:
                 cameras[camera_id] = set()
             cameras[camera_id].add(vehicle_id)
+
+        # Vozila koja su izašla
+        if not is_entrance and not is_camera:
+            if camera_id not in exits:
+                exits[camera_id] = set()
+            exits[camera_id].add(vehicle_id)
 
     # Koliko vozila je prošlo pored kamere sa svakog od ulaza
     detailed_stats = {}
@@ -89,9 +98,14 @@ def get_statistics():
         detailed_stats[entrance] = {
             "total_entrances": len(vehicles),
             "passed_cameras": {},
+            "exited": {}
         }
         for cam_id, cam_vehicles in cameras.items():
             passed = len(vehicles.intersection(cam_vehicles))
             detailed_stats[entrance]["passed_cameras"][cam_id] = passed
+        # Izlazi
+        for exit_id, exit_vehicles in exits.items():
+            exited_count = len(vehicles.intersection(exit_vehicles))
+            detailed_stats[entrance]["exited"][exit_id] = exited_count
 
     return {"statistics": detailed_stats}

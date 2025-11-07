@@ -62,15 +62,18 @@ def get_entrances():
         if str(item.get("is_entrance")).lower() == "true"
         and item.get("camera_id") in ["PULA-ENTRANCE", "RIJEKA-ENTRANCE", "UMAG-ENTRANCE"]
     ]
-    print(f"Pronađeno {len(entrances)} ulaznih vozila.")
+    print(f"🔍 Pronađeno {len(entrances)} ulaznih vozila.")
     return entrances
+
 
 def generate_vehicle_exits(entrances, processed_records, camera1_vehicle_ids, camera2_vehicle_ids):
     exits = []
 
     for vehicle in entrances:
         vehicle_id = vehicle.get("vehicle_id")
+        origin = vehicle.get("camera_id", "")
         key = make_unique_key(vehicle)
+
         if not key or key in processed_records:
             continue
 
@@ -83,26 +86,28 @@ def generate_vehicle_exits(entrances, processed_records, camera1_vehicle_ids, ca
         except ValueError:
             continue
 
-        origin = vehicle.get("camera_id", "")
+        must_exit = False
+        travel_time = None
 
-        # Pravila izlaska
         if origin == "PULA-ENTRANCE":
+            # vozila iz Pule NE MOGU izaći na ovom izlazu
             processed_records.add(key)
             continue
 
         elif origin == "UMAG-ENTRANCE":
-            if vehicle_id in camera1_vehicle_ids:
-                processed_records.add(key)
-                continue
-            travel_time = TRAVEL_TIME_FROM_UMAG
+            # izlaze samo ako NIJE prošlo pored CAMERA1
+            if vehicle_id not in camera1_vehicle_ids:
+                must_exit = True
+                travel_time = TRAVEL_TIME_FROM_UMAG
 
         elif origin == "RIJEKA-ENTRANCE":
-            if vehicle_id in camera2_vehicle_ids:
-                processed_records.add(key)
-                continue
-            travel_time = TRAVEL_TIME_FROM_RIJEKA
+            # izlaze samo ako NIJE prošlo pored CAMERA2
+            if vehicle_id not in camera2_vehicle_ids:
+                must_exit = True
+                travel_time = TRAVEL_TIME_FROM_RIJEKA
 
-        else:
+        if not must_exit:
+            processed_records.add(key)
             continue
 
         travel_time += random.randint(-TRAVEL_VARIATION, TRAVEL_VARIATION)
@@ -126,7 +131,7 @@ def send_data_to_server(exits):
         try:
             response = requests.post(API_URL, json=data)
             if response.status_code == 200:
-                print(f"{data['camera_id']} snimila izlaz {data['vehicle_id']} ({data['speed']} km/h) u {data['timestamp']}")
+                print(f"{data['camera_id']} snimila izlaz {data['vehicle_id']} u {data['timestamp']}")
             else:
                 print(f"Greška: {response.status_code}, {response.text}")
         except requests.exceptions.ConnectionError:
@@ -139,25 +144,20 @@ def main():
     processed_records = load_processed_records(PROCESSED_FILE)
 
     camera1_records = load_processed_records(CAMERA1_PROCESSED_FILE)
-    camera1_vehicle_ids = {rec.split("_")[0] for rec in camera1_records}
-
     camera2_records = load_processed_records(CAMERA2_PROCESSED_FILE)
-    camera2_vehicle_ids = {rec.split("_")[0] for rec in camera2_records}
 
     while True:
         entrances = get_entrances()
-        exits = generate_vehicle_exits(entrances, processed_records, camera1_vehicle_ids, camera2_vehicle_ids)
+        exits = generate_vehicle_exits(entrances, processed_records, camera1_records, camera2_records)
+
         if exits:
             send_data_to_server(exits)
             save_processed_records(processed_records, PROCESSED_FILE)
         else:
             print("Nema novih vozila za izlaz.")
+
         time.sleep(10)
 
 
 if __name__ == "__main__":
     main()
-
-# vozila koja su ušla na ulaz PULA NE MOGU izaći na ovaj izlaz 
-# vozila koja su ušla na ulaz UMAG i NISU PROŠLA pored kamere camera1 MORAJU izaći na ovaj izlaz
-# vozila koja su ušla na ulaz RIJEKA i NISU PROŠLA pored kamere camera2 MORAJU izaći na ovaj izlaz

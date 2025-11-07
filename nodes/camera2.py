@@ -5,6 +5,7 @@ import json
 from datetime import datetime, timedelta
 import boto3
 import os
+from filelock import FileLock  # ✅ dodano
 
 API_URL = "http://localhost:8000/readings"
 
@@ -20,6 +21,8 @@ RIJEKA_CAMERA2_CHANCE = 0.4
 
 PROCESSED_FILE = "processed_vehicles_camera2.json"
 CAMERA1_PROCESSED_FILE = "processed_vehicles_camera1.json"
+PULA_ROUTE_FILE = "pula_routes.json"
+LOCK_FILE = PULA_ROUTE_FILE + ".lock"  # ✅ lock file za siguran pristup
 
 dynamodb = boto3.resource(
     "dynamodb",
@@ -31,20 +34,25 @@ dynamodb = boto3.resource(
 table = dynamodb.Table("Readings")
 
 
-def load_processed_records(file_path):
+def load_json(file_path):
     if os.path.exists(file_path):
         with open(file_path, "r") as f:
-            return set(json.load(f))
-    return set()
+            return json.load(f)
+    return {}
 
 
-def save_processed_records(processed_records, file_path):
+def save_json(data, file_path):
     with open(file_path, "w") as f:
-        json.dump(list(processed_records), f)
+        json.dump(data, f, indent=2)
 
 
-def make_unique_key(vehicle):
-    return f"{vehicle.get('vehicle_id')}_{vehicle.get('camera_id')}_{vehicle.get('timestamp')}"
+def load_processed_records():
+    data = load_json(PROCESSED_FILE)
+    return set(data) if isinstance(data, list) else set()
+
+
+def save_processed_records(processed_records):
+    save_json(list(processed_records), PROCESSED_FILE)
 
 
 def scan_full_table():
@@ -75,55 +83,72 @@ def generate_speed():
 def generate_vehicle_passages(entrances, processed_records, camera1_vehicle_ids):
     passages = []
 
-    for vehicle in entrances:
-        vehicle_id = vehicle.get("vehicle_id")
-        key = make_unique_key(vehicle)
-        if not key or key in processed_records:
-            continue
+    # ✅ zaključavanje prilikom pristupa `pula_routes.json`
+    with FileLock(LOCK_FILE):
+        pula_routes = load_json(PULA_ROUTE_FILE)
 
-        timestamp_str = vehicle.get("timestamp")
-        if not timestamp_str:
-            continue
+        for vehicle in entrances:
+            vehicle_id = vehicle.get("vehicle_id")
+            origin = vehicle.get("camera_id")
+            timestamp_str = vehicle.get("timestamp")
 
-        try:
-            entry_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-        except ValueError:
-            continue
+            if not vehicle_id or not timestamp_str or not origin:
+                continue
 
-        origin = vehicle.get("camera_id", "")
+            key = f"{vehicle_id}_{origin}_{timestamp_str}"
+            if key in processed_records:
+                continue
 
-        if origin == "UMAG-ENTRANCE":
-            travel_time = TRAVEL_TIME_FROM_UMAG
+            try:
+                entry_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                continue
 
-        elif origin == "RIJEKA-ENTRANCE":
-            if random.random() > RIJEKA_CAMERA2_CHANCE:
+            must_pass = False
+            travel_time = None
+
+            # --- Pravila ---
+            if origin == "UMAG-ENTRANCE":
+                must_pass = True
+                travel_time = TRAVEL_TIME_FROM_UMAG
+
+            elif origin == "RIJEKA-ENTRANCE":
+                if random.random() <= RIJEKA_CAMERA2_CHANCE:
+                    must_pass = True
+                    travel_time = TRAVEL_TIME_FROM_RIJEKA
+
+            elif origin == "PULA-ENTRANCE":
+                route = pula_routes.get(vehicle_id)
+                if not route:
+                    # ako nije definirano, postavi na CAMERA2
+                    pula_routes[vehicle_id] = "CAMERA2"
+                    must_pass = True
+                    travel_time = TRAVEL_TIME_FROM_PULA
+                elif route == "CAMERA2":
+                    must_pass = True
+                    travel_time = TRAVEL_TIME_FROM_PULA
+
+            if not must_pass:
                 processed_records.add(key)
                 continue
-            travel_time = TRAVEL_TIME_FROM_RIJEKA
 
-        elif origin == "PULA-ENTRANCE":
-            if vehicle_id in camera1_vehicle_ids:
-                processed_records.add(key)
-                continue
-            travel_time = TRAVEL_TIME_FROM_PULA
+            travel_time += random.randint(-TRAVEL_VARIATION, TRAVEL_VARIATION)
+            passage_time = entry_time + timedelta(minutes=travel_time)
 
-        else:
-            continue
+            passages.append({
+                "camera_id": CAMERA_ID,
+                "camera_location": LOCATION,
+                "vehicle_id": vehicle_id,
+                "timestamp": passage_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "is_camera": True,
+                "speed": generate_speed(),
+                "speed_limit": 130,
+            })
 
-        travel_time += random.randint(-TRAVEL_VARIATION, TRAVEL_VARIATION)
-        passage_time = entry_time + timedelta(minutes=travel_time)
+            processed_records.add(key)
 
-        passages.append({
-            "camera_id": CAMERA_ID,
-            "camera_location": LOCATION,
-            "vehicle_id": vehicle_id,
-            "timestamp": passage_time.strftime("%Y-%m-%d %H:%M:%S"),
-            "is_camera": True,
-            "speed": generate_speed(),
-            "speed_limit": 130,
-        })
-
-        processed_records.add(key)
+        # 🔒 spremi ažurirane rute dok je lock aktivan
+        save_json(pula_routes, PULA_ROUTE_FILE)
 
     return passages
 
@@ -131,31 +156,34 @@ def generate_vehicle_passages(entrances, processed_records, camera1_vehicle_ids)
 def send_data_to_server(passages):
     for data in passages:
         try:
-            response = requests.post(API_URL, json=data)
-            if response.status_code == 200:
-                print(f"{data['camera_id']} snimila {data['vehicle_id']} ({data['speed']} km/h) u {data['timestamp']}")
+            r = requests.post(API_URL, json=data)
+            if r.status_code == 200:
+                print(f"{CAMERA_ID} snimila {data['vehicle_id']} ({data['speed']} km/h) u {data['timestamp']}")
             else:
-                print(f"Greška: {response.status_code}, {response.text}")
+                print(f"Greška: {r.status_code}, {r.text}")
         except requests.exceptions.ConnectionError:
-            print("Nije moguće spojiti se na server. Provjeri FastAPI.")
+            print("Ne mogu se spojiti na server. Provjeri FastAPI.")
         time.sleep(random.uniform(1.5, 3.5))
 
 
 def main():
     print("Pokrećem generiranje podataka za kameru CAMERA2...")
-    processed_records = load_processed_records(PROCESSED_FILE)
+    processed_records = load_processed_records()
 
-    camera1_records = load_processed_records(CAMERA1_PROCESSED_FILE)
-    camera1_vehicle_ids = {rec.split("_")[0] for rec in camera1_records}
+    # CAMERA1 zapisi za eventualnu provjeru
+    camera1_records = load_json(CAMERA1_PROCESSED_FILE)
+    camera1_vehicle_ids = {rec.split("_")[0] for rec in camera1_records} if isinstance(camera1_records, list) else set()
 
     while True:
         entrances = get_entrances()
         passages = generate_vehicle_passages(entrances, processed_records, camera1_vehicle_ids)
+
         if passages:
             send_data_to_server(passages)
-            save_processed_records(processed_records, PROCESSED_FILE)
+            save_processed_records(processed_records)
         else:
             print("Nema novih vozila za obradu.")
+
         time.sleep(10)
 
 

@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta
 import boto3
 import os
-from filelock import FileLock  # ✅ dodano
+from filelock import FileLock
 
 API_URL = "http://localhost:8000/readings"
 
@@ -21,8 +21,14 @@ RIJEKA_CAMERA2_CHANCE = 0.4
 
 PROCESSED_FILE = "processed_vehicles_camera2.json"
 CAMERA1_PROCESSED_FILE = "processed_vehicles_camera1.json"
+
 PULA_ROUTE_FILE = "pula_routes.json"
-LOCK_FILE = PULA_ROUTE_FILE + ".lock"  # ✅ lock file za siguran pristup
+RIJEKA_ROUTE_FILE = "rijeka_routes.json"
+UMAG_ROUTE_FILE = "umag_routes.json"
+
+PULA_LOCK = PULA_ROUTE_FILE + ".lock"
+RIJEKA_LOCK = RIJEKA_ROUTE_FILE + ".lock"
+UMAG_LOCK = UMAG_ROUTE_FILE + ".lock"
 
 dynamodb = boto3.resource(
     "dynamodb",
@@ -35,7 +41,7 @@ table = dynamodb.Table("Readings")
 
 
 def load_json(file_path):
-    if os.path.exists(file_path):
+    if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
         with open(file_path, "r") as f:
             return json.load(f)
     return {}
@@ -83,72 +89,93 @@ def generate_speed():
 def generate_vehicle_passages(entrances, processed_records, camera1_vehicle_ids):
     passages = []
 
-    # ✅ zaključavanje prilikom pristupa `pula_routes.json`
-    with FileLock(LOCK_FILE):
+    # 🔒 Sigurno učitavanje svih ruta
+    with FileLock(PULA_LOCK):
         pula_routes = load_json(PULA_ROUTE_FILE)
+    with FileLock(RIJEKA_LOCK):
+        rijeka_routes = load_json(RIJEKA_ROUTE_FILE)
+    with FileLock(UMAG_LOCK):
+        umag_routes = load_json(UMAG_ROUTE_FILE)
 
-        for vehicle in entrances:
-            vehicle_id = vehicle.get("vehicle_id")
-            origin = vehicle.get("camera_id")
-            timestamp_str = vehicle.get("timestamp")
+    for vehicle in entrances:
+        vehicle_id = vehicle.get("vehicle_id")
+        origin = vehicle.get("camera_id")
+        timestamp_str = vehicle.get("timestamp")
 
-            if not vehicle_id or not timestamp_str or not origin:
-                continue
+        if not vehicle_id or not timestamp_str or not origin:
+            continue
 
-            key = f"{vehicle_id}_{origin}_{timestamp_str}"
-            if key in processed_records:
-                continue
+        key = f"{vehicle_id}_{origin}_{timestamp_str}"
+        if key in processed_records:
+            continue
 
-            try:
-                entry_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                continue
+        try:
+            entry_time = datetime.strptime(timestamp_str, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
 
-            must_pass = False
-            travel_time = None
+        must_pass = False
+        travel_time = None
 
-            # --- Pravila ---
-            if origin == "UMAG-ENTRANCE":
+        if origin == "UMAG-ENTRANCE":
+            route = umag_routes.get(vehicle_id)
+            if not route:
+                umag_routes[vehicle_id] = "CAMERA2"
+                must_pass = True
+                travel_time = TRAVEL_TIME_FROM_UMAG
+            elif route == "CAMERA2":
                 must_pass = True
                 travel_time = TRAVEL_TIME_FROM_UMAG
 
-            elif origin == "RIJEKA-ENTRANCE":
+        elif origin == "RIJEKA-ENTRANCE":
+            route = rijeka_routes.get(vehicle_id)
+            if not route:
                 if random.random() <= RIJEKA_CAMERA2_CHANCE:
+                    rijeka_routes[vehicle_id] = "CAMERA2"
                     must_pass = True
                     travel_time = TRAVEL_TIME_FROM_RIJEKA
+                else:
+                    rijeka_routes[vehicle_id] = "CAMERA1"
+            elif route == "CAMERA2":
+                must_pass = True
+                travel_time = TRAVEL_TIME_FROM_RIJEKA
 
-            elif origin == "PULA-ENTRANCE":
-                route = pula_routes.get(vehicle_id)
-                if not route:
-                    # ako nije definirano, postavi na CAMERA2
-                    pula_routes[vehicle_id] = "CAMERA2"
-                    must_pass = True
-                    travel_time = TRAVEL_TIME_FROM_PULA
-                elif route == "CAMERA2":
-                    must_pass = True
-                    travel_time = TRAVEL_TIME_FROM_PULA
+        elif origin == "PULA-ENTRANCE":
+            route = pula_routes.get(vehicle_id)
+            if not route:
+                pula_routes[vehicle_id] = "CAMERA2"
+                must_pass = True
+                travel_time = TRAVEL_TIME_FROM_PULA
+            elif route == "CAMERA2":
+                must_pass = True
+                travel_time = TRAVEL_TIME_FROM_PULA
 
-            if not must_pass:
-                processed_records.add(key)
-                continue
-
-            travel_time += random.randint(-TRAVEL_VARIATION, TRAVEL_VARIATION)
-            passage_time = entry_time + timedelta(minutes=travel_time)
-
-            passages.append({
-                "camera_id": CAMERA_ID,
-                "camera_location": LOCATION,
-                "vehicle_id": vehicle_id,
-                "timestamp": passage_time.strftime("%Y-%m-%d %H:%M:%S"),
-                "is_camera": True,
-                "speed": generate_speed(),
-                "speed_limit": 130,
-            })
-
+        if not must_pass:
             processed_records.add(key)
+            continue
 
-        # 🔒 spremi ažurirane rute dok je lock aktivan
+        travel_time += random.randint(-TRAVEL_VARIATION, TRAVEL_VARIATION)
+        passage_time = entry_time + timedelta(minutes=travel_time)
+
+        passages.append({
+            "camera_id": CAMERA_ID,
+            "camera_location": LOCATION,
+            "vehicle_id": vehicle_id,
+            "timestamp": passage_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "is_camera": True,
+            "speed": generate_speed(),
+            "speed_limit": 130,
+        })
+
+        processed_records.add(key)
+
+    # 🔒 Sigurno spremanje svih ruta
+    with FileLock(PULA_LOCK):
         save_json(pula_routes, PULA_ROUTE_FILE)
+    with FileLock(RIJEKA_LOCK):
+        save_json(rijeka_routes, RIJEKA_ROUTE_FILE)
+    with FileLock(UMAG_LOCK):
+        save_json(umag_routes, UMAG_ROUTE_FILE)
 
     return passages
 
@@ -170,7 +197,6 @@ def main():
     print("Pokrećem generiranje podataka za kameru CAMERA2...")
     processed_records = load_processed_records()
 
-    # CAMERA1 zapisi za eventualnu provjeru
     camera1_records = load_json(CAMERA1_PROCESSED_FILE)
     camera1_vehicle_ids = {rec.split("_")[0] for rec in camera1_records} if isinstance(camera1_records, list) else set()
 

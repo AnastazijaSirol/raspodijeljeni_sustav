@@ -9,20 +9,19 @@ import boto3
 
 API_URL = "http://localhost:8000/readings"
 
-EXIT_ID = "PULA-EXIT"
-LOCATION = "Izlaz Pula"
+EXIT_ID = "RIJEKA-EXIT"
+LOCATION = "Izlaz Rijeka"
 
-TRAVEL_TIME_FROM_RIJEKA = 90
-TRAVEL_TIME_FROM_UMAG = 60
+TRAVEL_TIME_FROM_PULA = 90
+TRAVEL_TIME_FROM_UMAG = 70
 TRAVEL_VARIATION = 10  # +- 10 min
 
-PROCESSED_FILE = "processed_vehicles_pula_exit.json"
-RIJEKA_ROUTES_FILE = "rijeka_routes.json"
+PROCESSED_FILE = "processed_vehicles_rijeka_exit.json"
+PULA_ROUTES_FILE = "pula_routes.json"
 UMAG_ROUTES_FILE = "umag_routes.json"
 
-RIJEKA_LOCK = RIJEKA_ROUTES_FILE + ".lock"
+PULA_LOCK = PULA_ROUTES_FILE + ".lock"
 UMAG_LOCK = UMAG_ROUTES_FILE + ".lock"
-
 
 def load_json(file_path):
     if os.path.exists(file_path) and os.path.getsize(file_path) > 0:
@@ -93,14 +92,15 @@ def camera_has(vehicle_routes, vehicle_id, cam):
         return cam in val
     return False
 
-
 def generate_vehicle_exits(entrances, processed_records):
     exits = []
 
-    with FileLock(RIJEKA_LOCK):
-        rijeka_routes = load_json(RIJEKA_ROUTES_FILE)
+    with FileLock(PULA_LOCK):
+        pula_routes = load_json(PULA_ROUTES_FILE)
     with FileLock(UMAG_LOCK):
         umag_routes = load_json(UMAG_ROUTES_FILE)
+
+    print(f"Učitano {len(pula_routes)} vozila iz Pula ruta i {len(umag_routes)} iz Umag ruta.")
 
     for vehicle in entrances:
         vehicle_id = vehicle.get("vehicle_id")
@@ -122,17 +122,20 @@ def generate_vehicle_exits(entrances, processed_records):
         must_exit = False
         travel_time = None
 
-        if origin == "PULA-ENTRANCE":
+        # Vozila iz RIJEKE ne mogu izaći ovdje
+        if origin == "RIJEKA-ENTRANCE":
             processed_records.add(key)
             continue
 
-        elif origin == "RIJEKA-ENTRANCE":
-            if not camera_has(rijeka_routes, vehicle_id, "CAMERA2"):
+        # Vozila iz PULE izlaze ako su prošla CAMERA1, ali nisu CAMERA2
+        elif origin == "PULA-ENTRANCE":
+            if camera_has(pula_routes, vehicle_id, "CAMERA1") and not camera_has(pula_routes, vehicle_id, "CAMERA2"):
                 must_exit = True
-                travel_time = TRAVEL_TIME_FROM_RIJEKA
+                travel_time = TRAVEL_TIME_FROM_PULA
 
+        # Vozila iz UMAGA izlaze ako su prošla i CAMERA1 i CAMERA2
         elif origin == "UMAG-ENTRANCE":
-            if not camera_has(umag_routes, vehicle_id, "CAMERA1"):
+            if camera_has(umag_routes, vehicle_id, "CAMERA1") and camera_has(umag_routes, vehicle_id, "CAMERA2"):
                 must_exit = True
                 travel_time = TRAVEL_TIME_FROM_UMAG
 
@@ -168,7 +171,7 @@ def send_data_to_server(exits):
         time.sleep(random.uniform(1.5, 3.5))
 
 def main():
-    print("🚦 Pokrećem simulaciju izlaza PULA...")
+    print("Pokrećem simulaciju izlaza RIJEKA...")
     processed_records = load_processed_records()
 
     while True:
@@ -187,6 +190,7 @@ def main():
 if __name__ == "__main__":
     main()
 
-# Vozila koja su došla sa ulaza PULA ne izlaze na ovaj izlaz
-# Vozila koja su došla sa ulaza RIJEKA izlaze ako nisu snimljena na CAMERA2, a snimljena su na CAMERA1
-# Vozila koja su došla sa ulaza UMAG izlaze ako nisu snimljena na CAMERA1, a snimljena su na CAMERA2
+
+# Vozila koja su došla sa ulaza RIJEKA ne izlaze na ovaj izlaz
+# Vozila koja su došla sa ulaza PULA izlaze ako su prošla CAMERA1 ali nisu CAMERA2
+# Vozila koja su došla sa ulaza UMAG izlaze ako su prošla i CAMERA1 i CAMERA2

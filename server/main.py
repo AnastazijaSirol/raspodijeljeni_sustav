@@ -28,14 +28,15 @@ def root():
 def add_reading(reading: Reading):
     table = dynamodb_client.Table(TABLE_NAME)
 
-    if reading.is_entrance:
-        if not can_enter(reading.vehicle_id, table):
-            return {
-                "status": "blocked",
-                "reason": "Vozilo je već ušlo u zadnjih 12 sati.",
-            }
+    item = reading.model_dump()
 
-    table.put_item(Item=reading.model_dump())
+    if not item.get("vehicle_id"):
+        return {"status": "error", "reason": "vehicle_id je obavezno"}
+    if not item.get("timestamp"):
+        item["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    table.put_item(Item=item)
+
     return {"status": "success", "data": reading}
 
 
